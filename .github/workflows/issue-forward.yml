@@ -43,7 +43,7 @@ jobs:
     steps:
       - name: Dispatch to community-issue-tracker
         env:
-          GH_TOKEN: ${{ secrets.ISSUE_TRACKER_DISPATCH_TOKEN }}
+          GH_TOKEN: ${{ secrets.COMMUNITY_ISSUE_DISPATCH_TOKEN }}
           EVENT_KIND: ${{ github.event_name }}
           EVENT_ACTION: ${{ github.event.action }}
           REPO: ${{ github.repository }}
