@@ -1,0 +1,44 @@
+name: Review direct (secrets probe)
+
+# TEST / PROBE — deploy alongside the relay to answer one question: does a
+# pull_request_review on a FORK PR receive secrets?
+#
+# If it does, we can forward reviews directly from here (the PR number is right
+# there in the event payload) and delete the whole workflow_run relay:
+# review-relay.yml + review-forward.yml + the head-branch resolution. If it does
+# not, the relay is required and this file can be removed.
+#
+# Run it on a fork PR (e.g. the bot's fork), submit a review, and read the RESULT
+# line in the log.
+
+on:
+  pull_request_review:
+    types: [submitted, dismissed]
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report token availability and (if present) dispatch directly
+        env:
+          GH_TOKEN: ${{ secrets.PR_DISPATCH_TOKEN }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          IS_FORK: ${{ github.event.pull_request.head.repo.full_name != github.event.pull_request.base.repo.full_name }}
+        run: |
+          echo "PR #$PR_NUMBER  fork=$IS_FORK"
+          if [ -z "$GH_TOKEN" ]; then
+            echo "RESULT: NO secrets on this pull_request_review (token empty) -> the relay IS required"
+            exit 0
+          fi
+          echo "RESULT: secrets ARE available on this pull_request_review (token present) -> the relay is NOT needed"
+          # Prove the direct path end to end: dispatch with the PR number from the
+          # event (no head lookup needed). ingest pulls the reviews and moves the card.
+          jq -n --arg repo "$REPO" --argjson number "$PR_NUMBER" \
+            '{event_type: "pr-event", client_payload: {
+               event: "review_activity", repo: $repo, number: $number
+             }}' \
+          | gh api -X POST /repos/duckdblabs/pr-tracker/dispatches --input -
