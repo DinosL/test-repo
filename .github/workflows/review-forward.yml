@@ -2,8 +2,8 @@ name: Forward review activity to pr-tracker
 
 # Runs on the default branch WITH secrets (workflow_run always does, even when the
 # run it reacts to had none). The triggering review run gave us nothing we trust,
-# so we derive the PR number from the GitHub-supplied head SHA and send only that
-# hint; pr-tracker pulls the actual reviews from the API.
+# so we derive the PR number from the GitHub-supplied head (owner:branch) and send
+# only that hint; pr-tracker pulls the actual reviews from the API.
 
 on:
   workflow_run:
@@ -25,18 +25,23 @@ jobs:
           GITHUB_LOOKUP_TOKEN: ${{ github.token }}
           DISPATCH_TOKEN: ${{ secrets.PR_DISPATCH_TOKEN }}
           REPO: ${{ github.repository }}
-          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_OWNER: ${{ github.event.workflow_run.head_repository.owner.login }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
         run: |
           set -euo pipefail
-          if ! [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]; then
-            echo "unexpected head_sha ($HEAD_SHA); skipping"; exit 0
+          if [ -z "$HEAD_OWNER" ] || [ -z "$HEAD_BRANCH" ]; then
+            echo "missing head owner/branch; skipping"; exit 0
           fi
-          pulls=$(GH_TOKEN="$GITHUB_LOOKUP_TOKEN" gh api "/repos/$REPO/commits/$HEAD_SHA/pulls" || echo '[]')
+          # Resolve the PR by its head (owner:branch). This finds fork PRs, which
+          # commits/{sha}/pulls does NOT — a fork PR's head commit lives in the fork,
+          # not the base repo. Works for same-repo PRs too. A miss yields '[]'.
+          pulls=$(GH_TOKEN="$GITHUB_LOOKUP_TOKEN" gh api --method GET "/repos/$REPO/pulls" \
+            -f head="$HEAD_OWNER:$HEAD_BRANCH" -f state=all -f per_page=100 || echo '[]')
           number=$(printf '%s' "$pulls" | jq -r '(map(select(.state=="open")) + .) | .[0].number // empty')
           if ! [[ "$number" =~ ^[0-9]+$ ]]; then
-            echo "no PR found for $HEAD_SHA; skipping"; exit 0
+            echo "no PR found for head $HEAD_OWNER:$HEAD_BRANCH; skipping"; exit 0
           fi
-          echo "resolved PR #$number for $HEAD_SHA; dispatching review_activity"
+          echo "resolved PR #$number for $HEAD_OWNER:$HEAD_BRANCH; dispatching review_activity"
           jq -n --arg repo "$REPO" --argjson number "$number" \
             '{event_type: "pr-event", client_payload: {
                event: "review_activity", repo: $repo, number: $number
